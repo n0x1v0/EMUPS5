@@ -27,6 +27,7 @@
 #include <atomic>
 #include <fmt/format.h>
 #include <list>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -175,7 +176,7 @@ struct BufferAttributeGroup {
 	int                      category = VIDEO_OUT_BUFFER_ATTRIBUTE_CATEGORY_UNCOMPRESSED;
 	bool                     occupied = false;
 
-	[[nodiscard]] Graphics::ImageInfo ImageInfo(const VideoOutBuffer& buffer) const;
+	[[nodiscard]] std::optional<Graphics::ImageInfo> ImageInfo(const VideoOutBuffer& buffer) const;
 };
 
 struct VideoOutConfig {
@@ -542,7 +543,8 @@ static int ReserveFlipRequest(VideoOutDriver::Impl& driver, int handle, int inde
 	return OK;
 }
 
-Graphics::ImageInfo BufferAttributeGroup::ImageInfo(const VideoOutBuffer& buffer) const {
+std::optional<Graphics::ImageInfo> BufferAttributeGroup::ImageInfo(
+    const VideoOutBuffer& buffer) const {
 	const auto compression = Graphics::ClassifyVideoOutCompression(
 	    category == VIDEO_OUT_BUFFER_ATTRIBUTE_CATEGORY_COMPRESSED, buffer.metadata_address,
 	    attribute.dcc_control, attribute.dcc_cb_register_clear_color);
@@ -554,11 +556,14 @@ Graphics::ImageInfo BufferAttributeGroup::ImageInfo(const VideoOutBuffer& buffer
 	    attribute.tiling_mode != 0 || attribute.pad0 != 0 || attribute.reserved1[0] != 0 ||
 	    attribute.reserved1[1] != 0 || attribute.reserved1[2] != 0 || buffer.data_address == 0 ||
 	    compression == Graphics::VideoOutCompression::Unsupported) {
-		EXIT("unsupported or invalid video-out surface attributes\n");
+		LOGF_COLOR(Log::Color::Yellow, "video-out: unsupported or invalid surface attributes\n");
+		return std::nullopt;
 	}
 	Graphics::VideoOutPixelFormatInfo pixel_format {};
 	if (!Graphics::DecodeVideoOutPixelFormat(attribute.pixel_format, pixel_format)) {
-		EXIT("unsupported video-out pixel format: 0x%016" PRIx64 "\n", attribute.pixel_format);
+		LOGF_COLOR(Log::Color::Yellow, "video-out: unsupported pixel format: 0x%016" PRIx64 "\n",
+		           attribute.pixel_format);
+		return std::nullopt;
 	}
 	const auto          tile_mode = Graphics::Prospero::TileMode::kRenderTarget;
 	Graphics::ImageInfo info {};
@@ -575,13 +580,15 @@ Graphics::ImageInfo BufferAttributeGroup::ImageInfo(const VideoOutBuffer& buffer
 	info.UpdateSize();
 	if (info.data.size == 0 || info.tiling.block.block_size != 65536 ||
 	    (buffer.data_address & 65535u) != 0) {
-		EXIT("invalid video-out surface footprint or alignment\n");
+		LOGF_COLOR(Log::Color::Yellow, "video-out: invalid surface footprint or alignment\n");
+		return std::nullopt;
 	}
 	if (compression != Graphics::VideoOutCompression::Uncompressed) {
 		Graphics::TileSizeAlign dcc_size {};
 		if (!Graphics::TileGetDccSize(attribute.width, attribute.height, 1,
 		                              pixel_format.bytes_per_element, 1, tile_mode, dcc_size)) {
-			EXIT("invalid video-out DCC footprint\n");
+			LOGF_COLOR(Log::Color::Yellow, "video-out: invalid DCC footprint\n");
+			return std::nullopt;
 		}
 		info.metadata.range       = {buffer.metadata_address, dcc_size.size};
 		info.metadata.kind        = Graphics::ImageMetadataKind::Dcc;
@@ -590,7 +597,8 @@ Graphics::ImageInfo BufferAttributeGroup::ImageInfo(const VideoOutBuffer& buffer
 	}
 	Graphics::ImageOps::Validate(info);
 	if (!Graphics::IsSupportedVideoOutFormat(info)) {
-		EXIT("unsupported normalized video-out format\n");
+		LOGF_COLOR(Log::Color::Yellow, "video-out: unsupported normalized format\n");
+		return std::nullopt;
 	}
 	return info;
 }
@@ -641,7 +649,9 @@ int VideoOutDriver::Impl::Open(int bus_type, int index) {
 	if (bus == VIDEO_OUT_BUSES.end()) {
 		return VIDEO_OUT_ERROR_INVALID_VALUE;
 	}
-	EXIT_NOT_IMPLEMENTED(index != 0);
+	if (index != 0) {
+		return VIDEO_OUT_ERROR_INVALID_VALUE;
+	}
 	Common::LockGuard lock(m_mutex);
 
 	const int handle = static_cast<int>(bus - VIDEO_OUT_BUSES.begin()) + 1;
@@ -701,7 +711,10 @@ bool VideoOutDriver::Impl::Close(int handle) {
 		if (config.closing) {
 			return false;
 		}
-		EXIT_IF(config.slave_count != 0);
+		if (config.slave_count != 0) {
+			LOGF_COLOR(Log::Color::Yellow, "video-out: cannot close a master with attached slaves\n");
+			return false;
+		}
 		config.opened  = false;
 		config.closing = true;
 		if (++config.generation == 0) {
@@ -1085,11 +1098,17 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer& buffer) {
 				     " index=%d group=%d\n",
 				     request_id, index, surface.group_index);
 			}
-			const auto& group   = cfg->groups[surface.group_index];
-			source_info         = group.ImageInfo(surface);
-			hdr                 = Graphics::IsHdrVideoOutPixelFormat(group.attribute.pixel_format);
-			premultiplied_alpha = (group.attribute.option &
-			                       VIDEO_OUT_BUFFER_ATTRIBUTE_OPTION_ALPHA_PREMULTIPLIED) != 0;
+			const auto& group      = cfg->groups[surface.group_index];
+			const auto  image_info = group.ImageInfo(surface);
+			if (!image_info) {
+				LOGF_COLOR(Log::Color::Yellow, "video-out: dropping flip from invalid surface\n");
+				current = false;
+			} else {
+				source_info         = *image_info;
+				hdr                 = Graphics::IsHdrVideoOutPixelFormat(group.attribute.pixel_format);
+				premultiplied_alpha = (group.attribute.option &
+				                       VIDEO_OUT_BUFFER_ATTRIBUTE_OPTION_ALPHA_PREMULTIPLIED) != 0;
+			}
 		}
 	}
 	if (!current) {
@@ -1305,7 +1324,9 @@ KYTY_SYSV_ABI void VideoOutAddBufferAttributeOption(VideoOutBufferAttribute2* at
 KYTY_SYSV_ABI int VideoOutOpen(int user_id, int bus_type, int index, const void* param) {
 	PRINT_NAME();
 
-	EXIT_NOT_IMPLEMENTED(user_id != 255 && user_id != 0);
+	if (user_id != 255 && user_id != 0) {
+		LOGF_COLOR(Log::Color::Yellow, "video-out: unexpected user_id %d\n", user_id);
+	}
 	LOGF("\t param = 0x%016" PRIx64 "\n", reinterpret_cast<uint64_t>(param));
 
 	return DriverState().Open(bus_type, index);
@@ -1324,7 +1345,10 @@ KYTY_SYSV_ABI void VideoOutSetBufferAttribute2(VideoOutBufferAttribute2* attribu
                                                uint64_t dcc_cb_register_clear_color) {
 	PRINT_NAME();
 
-	EXIT_NOT_IMPLEMENTED(attribute == nullptr);
+	if (attribute == nullptr) {
+		LOGF_COLOR(Log::Color::Yellow, "video-out: SetBufferAttribute2 called with null attribute\n");
+		return;
+	}
 
 	LOGF("\t pixel_format                = %016" PRIx64 "\n"
 	     "\t tiling_mode                 = %" PRIu32 "\n"
@@ -1477,7 +1501,9 @@ KYTY_SYSV_ABI int VideoOutRegisterBuffers2(int handle, int set_index, int buffer
 		    .data_address     = data_address,
 		    .metadata_address = metadata_address,
 		});
-		(void)group.ImageInfo(registrations.back());
+		if (!group.ImageInfo(registrations.back())) {
+			return VIDEO_OUT_ERROR_INVALID_VALUE;
+		}
 	}
 
 	Common::LockGuard lock(ctx->mutex);
@@ -1539,7 +1565,9 @@ KYTY_SYSV_ABI int VideoOutSubmitChangeBufferAttribute2(int handle, int set_index
 	};
 	for (const auto& buffer: ctx->buffers) {
 		if (buffer.group_index == set_index) {
-			(void)replacement.ImageInfo(buffer);
+			if (!replacement.ImageInfo(buffer)) {
+				return VIDEO_OUT_ERROR_INVALID_VALUE;
+			}
 		}
 	}
 	ctx->groups[set_index] = replacement;
@@ -1620,15 +1648,22 @@ void VideoOutDriver::CompleteFlip(uint64_t request_id) {
 
 void VideoOutDriver::WaitForSubmitSlot(int handle) {
 	auto* cfg = m_impl->Get(handle);
-	EXIT_IF(cfg == nullptr);
+	if (cfg == nullptr) {
+		return;
+	}
 	m_impl->GetFlipQueue().WaitForSubmitSlot(*cfg);
 }
 
 void VideoOutDriver::WaitFlipDone(int handle, int index) {
 	auto* ctx = m_impl->Get(handle);
-	EXIT_IF(ctx == nullptr);
+	if (ctx == nullptr) {
+		return;
+	}
 
-	EXIT_NOT_IMPLEMENTED(!IsValidBufferIndex(index));
+	if (!IsValidBufferIndex(index)) {
+		LOGF_COLOR(Log::Color::Yellow, "video-out: WaitFlipDone with invalid index %d\n", index);
+		return;
+	}
 	m_impl->GetFlipQueue().Wait(*ctx, index);
 }
 
