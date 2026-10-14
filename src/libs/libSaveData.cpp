@@ -687,7 +687,8 @@ int KYTY_SYSV_ABI SaveDataMount3(const SaveDataMount3* mount, SaveDataMountResul
 	}
 
 	if (!create && !create2 && !open) {
-		EXIT("unknown mount mode: %u", mount->mount_mode);
+		LOGF_COLOR(Log::Color::Yellow, "\t unknown mount mode: %u\n", mount->mount_mode);
+		return SAVE_DATA_ERROR_PARAMETER;
 	}
 
 	if (open && !Common::File::IsDirectoryExisting(mount_dir)) {
@@ -1273,8 +1274,9 @@ int KYTY_SYSV_ABI SaveDataGetMountInfo(const SaveDataMountPoint* mount_point,
 
 int KYTY_SYSV_ABI SaveDataSaveIcon(const SaveDataMountPoint* mount_point,
                                    const SaveDataIcon*       icon) {
-	EXIT_NOT_IMPLEMENTED(mount_point == nullptr);
-	EXIT_NOT_IMPLEMENTED(icon == nullptr);
+	if (mount_point == nullptr || icon == nullptr) {
+		return SAVE_DATA_ERROR_PARAMETER;
+	}
 
 	LOGF("\t buf       = %016" PRIx64 "\n"
 	     "\t buf_size  = %" PRIu64 "\n"
