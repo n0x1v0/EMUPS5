@@ -2200,6 +2200,22 @@ KYTY_CP_OP_PARSER(CpOpNop) {
 	return 0;
 }
 
+KYTY_CP_OP_PARSER(CpOpUnimplemented) {
+	KYTY_PROFILER_FUNCTION();
+
+	const auto opcode = (cmd_id >> 8u) & 0xffu;
+	const auto len    = KYTY_PM4_LEN(cmd_id);
+
+	static std::atomic<uint32_t> warn_count {0};
+	if (warn_count.fetch_add(1) < 256) {
+		LOGF("unimplemented PM4 opcode 0x%02" PRIx32
+		     " ignored, len=%" PRIu32 " (downgraded from fatal)\n",
+		     opcode, len);
+	}
+
+	return len - 1;
+}
+
 KYTY_CP_OP_PARSER(CpOpNumInstances) {
 	KYTY_PROFILER_FUNCTION();
 

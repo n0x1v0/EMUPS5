@@ -221,6 +221,16 @@ constexpr auto MakeOpcodeDispatchTable() {
 	g_cp_op_func[Pm4::IT_GET_LOD_STATS]             = CpOpGetLodStats;
 	g_cp_op_func[Pm4::IT_WAIT_REG_MEM_64]           = CpOpWaitRegMem64;
 
+	g_cp_op_func[Pm4::IT_CONTEXT_CONTROL]      = CpOpUnimplemented;
+	g_cp_op_func[Pm4::IT_INDIRECT_BUFFER_CNST] = CpOpUnimplemented;
+	g_cp_op_func[Pm4::IT_MEM_SEMAPHORE]        = CpOpUnimplemented;
+	g_cp_op_func[Pm4::IT_CP_DMA]               = CpOpUnimplemented;
+	g_cp_op_func[Pm4::IT_SURFACE_SYNC]         = CpOpUnimplemented;
+	g_cp_op_func[Pm4::IT_RELEASE_MEM]          = CpOpUnimplemented;
+	g_cp_op_func[Pm4::IT_SET_CONFIG_REG]       = CpOpUnimplemented;
+	g_cp_op_func[Pm4::IT_SET_QUEUE_REG]        = CpOpUnimplemented;
+	g_cp_op_func[Pm4::IT_DISPATCH_DRAW]        = CpOpUnimplemented;
+
 	return g_cp_op_func;
 }
 
