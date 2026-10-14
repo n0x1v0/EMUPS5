@@ -119,6 +119,7 @@ struct StubbedImportRecord {
 };
 
 static std::vector<StubbedImportRecord> g_stubbed_imports;
+static Common::Mutex                    g_stubbed_imports_mutex;
 static std::atomic_uint32_t             g_unresolved_stub_call_log_count {0};
 static std::vector<uint64_t>            g_unresolved_stub_thunk_pages;
 static uint64_t                         g_unresolved_stub_thunk_offset = 0;
@@ -169,6 +170,8 @@ static uint64_t AllocateUnresolvedImportThunk(uint64_t record_id) {
 
 static uint64_t RegisterStubbedImport(uint32_t index, const Program* program,
                                       const RelocationInfo& ri) {
+	Common::LockGuard lock(g_stubbed_imports_mutex);
+
 	for (const auto& record: g_stubbed_imports) {
 		if (record.patch_vaddr == ri.vaddr) {
 			return record.thunk_vaddr;
@@ -190,6 +193,8 @@ static uint64_t RegisterStubbedImport(uint32_t index, const Program* program,
 }
 
 static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id) {
+	Common::LockGuard lock(g_stubbed_imports_mutex);
+
 	const auto log_index = g_unresolved_stub_call_log_count.fetch_add(1);
 	if (log_index < 1024) {
 		if (record_id < g_stubbed_imports.size()) {

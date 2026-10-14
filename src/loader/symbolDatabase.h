@@ -54,8 +54,14 @@ public:
 	static std::string GenerateName(const SymbolResolve& s);
 
 private:
-	std::vector<SymbolRecord>               m_symbols;
-	std::unordered_map<std::string, size_t> m_map;
+	void Register(SymbolRecord r);
+
+	std::vector<SymbolRecord>                            m_symbols;
+	std::unordered_map<std::string, size_t>              m_map;
+	// Secondary indexes keyed by the leading token (NID or name) so NID/name lookups do not scan
+	// the whole table on every import resolution.
+	std::unordered_map<std::string, std::vector<size_t>> m_nid_index;
+	std::unordered_map<std::string, std::vector<size_t>> m_name_index;
 };
 
 } // namespace Loader
