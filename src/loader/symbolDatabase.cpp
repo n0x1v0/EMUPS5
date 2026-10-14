@@ -21,12 +21,26 @@ std::string SymbolDatabase::GenerateName(const SymbolResolve& s) {
 	                   s.module_version_minor, magic_enum::enum_name(s.type));
 }
 
+// The generated name is "token[...]"; the leading token is what FindByNid/FindByName match on.
+static std::string LeadingToken(const std::string& generated_name) {
+	const auto bracket = generated_name.find('[');
+	return generated_name.substr(0, bracket == std::string::npos ? generated_name.size() : bracket);
+}
+
+void SymbolDatabase::Register(SymbolRecord r) {
+	const auto index = m_symbols.size();
+	const auto token = LeadingToken(r.name);
+	m_map.insert_or_assign(r.name, index);
+	m_nid_index[token].push_back(index);
+	m_name_index[token].push_back(index);
+	m_symbols.push_back(std::move(r));
+}
+
 void SymbolDatabase::Add(const SymbolResolve& s, uint64_t vaddr) {
 	SymbolRecord r {};
 	r.name  = GenerateName(s);
 	r.vaddr = vaddr;
-	m_map.insert_or_assign(r.name, m_symbols.size());
-	m_symbols.push_back(r);
+	Register(std::move(r));
 }
 
 void SymbolDatabase::Add(const SymbolResolve& s, uint64_t vaddr, const std::string& dbg_name) {
@@ -34,8 +48,7 @@ void SymbolDatabase::Add(const SymbolResolve& s, uint64_t vaddr, const std::stri
 	r.name     = GenerateName(s);
 	r.vaddr    = vaddr;
 	r.dbg_name = dbg_name;
-	m_map.insert_or_assign(r.name, m_symbols.size());
-	m_symbols.push_back(r);
+	Register(std::move(r));
 }
 
 void SymbolDatabase::DbgDump(const std::string& folder, const std::string& file_name) {
@@ -67,10 +80,16 @@ const SymbolRecord* SymbolDatabase::Find(const SymbolResolve& s) const {
 
 const SymbolRecord* SymbolDatabase::FindByNid(const std::string& nid, SymbolType type,
                                                 uint64_t vaddr) const {
+	const auto it = m_nid_index.find(nid);
+	if (it == m_nid_index.end()) {
+		return nullptr;
+	}
+
 	auto prefix = nid + "[";
 	auto suffix = fmt::format("[{}]", magic_enum::enum_name(type));
 
-	for (const auto& symbol: m_symbols) {
+	for (const auto index: it->second) {
+		const auto& symbol = m_symbols[index];
 		if ((vaddr == 0 || symbol.vaddr == vaddr) && symbol.name.starts_with(prefix) &&
 		    symbol.name.ends_with(suffix)) {
 			return &symbol;
@@ -81,10 +100,16 @@ const SymbolRecord* SymbolDatabase::FindByNid(const std::string& nid, SymbolType
 }
 
 const SymbolRecord* SymbolDatabase::FindByName(const std::string& name, SymbolType type) const {
+	const auto it = m_name_index.find(name);
+	if (it == m_name_index.end()) {
+		return nullptr;
+	}
+
 	auto prefix = name + "[";
 	auto suffix = fmt::format("[{}]", magic_enum::enum_name(type));
 
-	for (const auto& symbol: m_symbols) {
+	for (const auto index: it->second) {
+		const auto& symbol = m_symbols[index];
 		if (symbol.name.starts_with(prefix) && symbol.name.ends_with(suffix)) {
 			return &symbol;
 		}
