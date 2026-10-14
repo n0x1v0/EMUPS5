@@ -130,7 +130,13 @@ static std::vector<uint8_t> PackDirents(const std::vector<Common::File::DirEntry
 	uint64_t             last_reclen_offset = 0;
 	for (const auto& entry: entries) {
 		const auto& name = entry.name;
-		EXIT_NOT_IMPLEMENTED(name.size() > 255);
+		// Guest dirents store the name length in a single byte; skip over-long names instead of
+		// aborting the emulator on harmless host content.
+		if (name.size() > 255) {
+			LOGF("FileSystem: skipping directory entry with too long name (%" PRIu64 " bytes)\n",
+			     static_cast<uint64_t>(name.size()));
+			continue;
+		}
 		const auto reclen = AlignUp(8 + name.size() + 1, 4);
 		if (offset + reclen > dirents.size()) {
 			if (!dirents.empty()) {
@@ -334,6 +340,23 @@ static bool HasWindowsForbiddenFilenameCharacter(const std::string& relative_pat
 }
 #endif
 
+// Reject guest paths that try to escape their mount root through ".." components.
+static bool ContainsParentTraversal(const std::string& relative_path) {
+	size_t start = 0;
+	while (start <= relative_path.size()) {
+		const auto slash = relative_path.find_first_of("/\\", start);
+		const auto end   = slash == std::string::npos ? relative_path.size() : slash;
+		if (relative_path.substr(start, end - start) == "..") {
+			return true;
+		}
+		if (slash == std::string::npos) {
+			break;
+		}
+		start = slash + 1;
+	}
+	return false;
+}
+
 std::filesystem::path MountPoints::ResolvePath(const std::string& mounted_name) {
 	Common::LockGuard lock(m_mutex);
 
@@ -347,6 +370,12 @@ std::filesystem::path MountPoints::ResolvePath(const std::string& mounted_name) 
 		auto rel_path = Common::RemoveFirst(Common::FixFilenameSlash(mounted_name), p.point.size());
 		while (rel_path.starts_with('/')) {
 			rel_path = Common::RemoveFirst(rel_path, 1);
+		}
+
+		// Never allow a guest path to escape the directory it was mounted at.
+		if (ContainsParentTraversal(rel_path)) {
+			LOGF("FileSystem: rejected path traversal: %s\n", mounted_name.c_str());
+			return {};
 		}
 
 		const auto native_rel_path = Common::PathFromUtf8(rel_path);
@@ -439,11 +468,15 @@ int KYTY_SYSV_ABI KernelOpen(const char* path, int flags, uint16_t mode) {
 		case 0: rw_mode = Common::File::Mode::Read; break;
 		case 1: rw_mode = Common::File::Mode::Write; break;
 		case 2: rw_mode = Common::File::Mode::ReadWrite; break;
-		default: EXIT("invalid flag_u: %u\n", flags_u);
+		default: return KERNEL_ERROR_EINVAL;
 	}
 
-	EXIT_NOT_IMPLEMENTED(directory && rw_mode != Common::File::Mode::Read);
-	EXIT_NOT_IMPLEMENTED(directory && (trunc || creat));
+	if (directory && rw_mode != Common::File::Mode::Read) {
+		return KERNEL_ERROR_EISDIR;
+	}
+	if (directory && (trunc || creat)) {
+		return KERNEL_ERROR_EISDIR;
+	}
 
 	int   descriptor = g_files->CreateDescriptor();
 	auto* file       = g_files->GetFile(descriptor);
@@ -500,8 +533,14 @@ int KYTY_SYSV_ABI KernelOpen(const char* path, int flags, uint16_t mode) {
 			return KERNEL_ERROR_ENOTDIR;
 		}
 
-		EXIT_NOT_IMPLEMENTED(!directory && rw_mode != Common::File::Mode::Read);
-		EXIT_NOT_IMPLEMENTED(!directory && (trunc || creat));
+		if (!directory && rw_mode != Common::File::Mode::Read) {
+			g_files->DeleteDescriptor(descriptor);
+			return KERNEL_ERROR_EISDIR;
+		}
+		if (!directory && (trunc || creat)) {
+			g_files->DeleteDescriptor(descriptor);
+			return KERNEL_ERROR_EISDIR;
+		}
 
 		const auto entries = Common::File::GetDirEntries(file->real_name);
 		file->dirents      = PackDirents(entries);
@@ -709,12 +748,16 @@ int64_t KYTY_SYSV_ABI KernelWrite(int d, const void* buf, size_t nbytes) {
 		return KERNEL_ERROR_EBADF;
 	}
 
-	EXIT_NOT_IMPLEMENTED(file->directory);
-	EXIT_NOT_IMPLEMENTED(file->special != SpecialFile::None);
+	if (file->directory) {
+		return KERNEL_ERROR_EISDIR;
+	}
+	if (file->special != SpecialFile::None) {
+		return KERNEL_ERROR_EINVAL;
+	}
 
-	EXIT_IF(!file->opened);
-
-	EXIT_NOT_IMPLEMENTED(nbytes > UINT_MAX);
+	if (nbytes > UINT_MAX) {
+		return KERNEL_ERROR_EFBIG;
+	}
 
 	file->mutex.Lock();
 
@@ -761,11 +804,13 @@ int64_t KYTY_SYSV_ABI KernelPread(int d, void* buf, size_t nbytes, int64_t offse
 		return KERNEL_ERROR_EBADF;
 	}
 
-	EXIT_NOT_IMPLEMENTED(file->directory);
+	if (file->directory) {
+		return KERNEL_ERROR_EISDIR;
+	}
 
-	EXIT_IF(!file->opened);
-
-	EXIT_NOT_IMPLEMENTED(nbytes > UINT_MAX);
+	if (nbytes > UINT_MAX) {
+		return KERNEL_ERROR_EFBIG;
+	}
 
 	if (file->special == SpecialFile::Random) {
 		FillRandomBuffer(buf, nbytes);
@@ -924,12 +969,16 @@ int64_t KYTY_SYSV_ABI KernelPwrite(int d, const void* buf, size_t nbytes, int64_
 		return KERNEL_ERROR_EBADF;
 	}
 
-	EXIT_NOT_IMPLEMENTED(file->directory);
-	EXIT_NOT_IMPLEMENTED(file->special != SpecialFile::None);
+	if (file->directory) {
+		return KERNEL_ERROR_EISDIR;
+	}
+	if (file->special != SpecialFile::None) {
+		return KERNEL_ERROR_EINVAL;
+	}
 
-	EXIT_IF(!file->opened);
-
-	EXIT_NOT_IMPLEMENTED(nbytes > UINT_MAX);
+	if (nbytes > UINT_MAX) {
+		return KERNEL_ERROR_EFBIG;
+	}
 
 	file->mutex.Lock();
 
