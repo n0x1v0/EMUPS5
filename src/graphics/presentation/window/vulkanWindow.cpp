@@ -252,21 +252,36 @@ static void VulkanFindPhysicalDevice(vk::Instance instance, vk::SurfaceKHR surfa
 			LOGF("colorWriteEnable is not supported\n");
 		}
 #else
-		check_feature(color_write_ext.colorWriteEnable, "colorWriteEnable");
+#if defined(__APPLE__)
+		if (color_write_ext.colorWriteEnable != VK_TRUE) {
+			LOGF("colorWriteEnable is not supported\n");
+		}
+#else
+		if (color_write_ext.colorWriteEnable != VK_TRUE) {
+			LOGF("WARNING: colorWriteEnable (VK_EXT_color_write_enable) is not supported by this device; continuing anyway\n");
+		}
 #endif
-		check_feature(image_view_min_lod.minLod, "image view minLod");
+		if (image_view_min_lod.minLod != VK_TRUE) {
+			LOGF("WARNING: image view minLod (VK_EXT_image_view_min_lod) is not supported by this device; continuing anyway\n");
+		}
 
-		check_feature(depth_clip_control.depthClipControl, "depthClipControl");
+		if (depth_clip_control.depthClipControl != VK_TRUE) {
+			LOGF("WARNING: depthClipControl (VK_EXT_depth_clip_control) is not supported by this device; continuing anyway\n");
+		}
 #if defined(__APPLE__)
 		if (depth_clip_enable.depthClipEnable != VK_TRUE) {
 			LOGF("depthClipEnable is not supported\n");
 		}
 #else
-		check_feature(depth_clip_enable.depthClipEnable, "depthClipEnable");
+		if (depth_clip_enable.depthClipEnable != VK_TRUE) {
+			LOGF("WARNING: depthClipEnable (VK_EXT_depth_clip_enable) is not supported by this device; continuing anyway\n");
+		}
 #endif
 #if !defined(__APPLE__)
 		check_feature(device_features2.features.depthClamp, "depthClamp");
-		check_feature(fragment_barycentric.fragmentShaderBarycentric, "fragmentShaderBarycentric");
+		if (fragment_barycentric.fragmentShaderBarycentric != VK_TRUE) {
+			LOGF("WARNING: fragmentShaderBarycentric (VK_KHR_fragment_shader_barycentric) is not supported by this device; continuing anyway\n");
+		}
 #endif
 
 		check_feature(features12.samplerMirrorClampToEdge, "samplerMirrorClampToEdge",
@@ -616,7 +631,10 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 #endif
 	robustness2.robustBufferAccess2 = supported_robustness2.robustBufferAccess2;
 	robustness2.robustImageAccess2  = supported_robustness2.robustImageAccess2;
-	robustness2.nullDescriptor      = VK_TRUE;
+	robustness2.nullDescriptor      = supported_robustness2.nullDescriptor != VK_FALSE ? supported_robustness2.nullDescriptor : VK_FALSE;
+	if (robustness2.nullDescriptor != VK_TRUE) {
+		LOGF("WARNING: robustness2.nullDescriptor is not supported by this device; continuing anyway\n");
+	}
 
 	auto features13 = WindowContext::RequiredVulkan13Features();
 	features13.pNext = &robustness2;
